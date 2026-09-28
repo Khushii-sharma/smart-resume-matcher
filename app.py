@@ -3,6 +3,7 @@ import json
 import time
 import fitz  # PyMuPDF
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google import genai
@@ -100,7 +101,13 @@ def analyze_resume_with_gemini(resume_text: str, job_description: str) -> tuple[
     """Executes ATS analysis with dynamic model discovery and fallback retry logic."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY is missing in environment variables.")
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except (KeyError, StreamlitSecretNotFoundError):
+            api_key = None
+
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY is missing from environment variables and Streamlit secrets.")
 
     client = genai.Client(api_key=api_key)
 
