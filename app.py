@@ -3,7 +3,6 @@ import json
 import time
 import fitz  # PyMuPDF
 import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google import genai
@@ -80,20 +79,30 @@ def extract_text_from_pdf(uploaded_file) -> str:
 
 
 def get_available_gemini_models(client: genai.Client) -> list[str]:
-    """Dynamically fetches active generation models from Gemini API."""
+    """
+    Dynamically fetches active standard generation models from Gemini API.
+    Excludes live streaming, WebSocket, embedding, and image models.
+    """
     try:
         available_models = []
-        for model in client.models.list():
-            model_id = model.name.replace("models/", "")
-            if "gemini" in model_id and "embed" not in model_id and "imagen" not in model_id:
-                available_models.append(model_id)
+        # Keywords for models that do NOT support standard generateContent
+        unsupported_keywords = ["live", "realtime", "bidi", "embed", "imagen", "vision", "audio"]
 
+        for model in client.models.list():
+            model_id = model.name.replace("models/", "").lower()
+            
+            # Check that it's a Gemini model and doesn't contain unsupported streaming/multimodal tags
+            if "gemini" in model_id and not any(kw in model_id for kw in unsupported_keywords):
+                available_models.append(model.name.replace("models/", ""))
+
+        # Prioritize Flash models, then Pro models
         flash_models = [m for m in available_models if "flash" in m]
         other_models = [m for m in available_models if "flash" not in m]
         
         sorted_models = flash_models + other_models
         return sorted_models if sorted_models else ["gemini-2.5-flash", "gemini-2.0-flash"]
     except Exception:
+        # Robust fallback defaults if listing fails
         return ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 
@@ -101,13 +110,7 @@ def analyze_resume_with_gemini(resume_text: str, job_description: str) -> tuple[
     """Executes ATS analysis with dynamic model discovery and fallback retry logic."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        try:
-            api_key = st.secrets["GEMINI_API_KEY"]
-        except (KeyError, StreamlitSecretNotFoundError):
-            api_key = None
-
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY is missing from environment variables and Streamlit secrets.")
+        raise ValueError("GEMINI_API_KEY is missing in environment variables.")
 
     client = genai.Client(api_key=api_key)
 
@@ -152,6 +155,7 @@ def analyze_resume_with_gemini(resume_text: str, job_description: str) -> tuple[
                     time.sleep(2 * (attempt + 1))
                     continue
                 else:
+                    # Skip non-capacity errors (e.g. 400 or invalid model parameters) immediately
                     break
 
     raise RuntimeError(f"Analysis failed across endpoints. Details: {last_exception}")
@@ -201,8 +205,7 @@ def main():
                     st.error("No readable text found in PDF. Ensure it is not an image scan.")
                     return
 
-                st.write("Querying Gemini ATS model...")
-                # Correctly unpack both return values: the analysis Pydantic object AND the model string
+                st.write("Querying ATS model...")
                 analysis, model_used = analyze_resume_with_gemini(resume_text, job_description)
                 status.update(label=f"Analysis completed using {model_used}", state="complete")
 
